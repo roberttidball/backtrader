@@ -25,8 +25,13 @@ from datetime import date, datetime
 import io
 import json
 
-from ..utils.py3 import (urlopen, urlquote, ProxyHandler, build_opener,
+from ..utils.py3 import (urlopen, ProxyHandler, build_opener,
                          install_opener)
+
+try:
+    from urllib.request import Request
+except ImportError:  # Python 2
+    from urllib2 import Request
 
 from .. import feed
 from ..utils import date2num
@@ -74,8 +79,8 @@ class FXMacroData(FXMacroDataCSV):
 
       - ``baseurl``: FXMacroData API base URL.
 
-      - ``apikey``: optional FXMacroData Professional API key.  It is sent as
-        the REST ``api_key`` query parameter.
+      - ``apikey``: optional FXMacroData Professional API key.  It is sent in
+        the ``X-API-Key`` request header.
 
       - ``proxies``: optional proxy dictionary as in ``{'http':
         'http://myproxy.com'}``.
@@ -87,7 +92,7 @@ class FXMacroData(FXMacroDataCSV):
     _online = True
 
     params = (
-        ('baseurl', 'https://fxmacrodata.com/api/v1'),
+        ('baseurl', 'https://api.fxmacrodata.com/v1'),
         ('proxies', {}),
         ('buffered', True),
         ('apikey', None),
@@ -110,11 +115,12 @@ class FXMacroData(FXMacroDataCSV):
             urlargs.append('end_date={}'.format(
                 self.p.todate.strftime('%Y-%m-%d')))
 
-        if self.p.apikey is not None:
-            urlargs.append('api_key={}'.format(urlquote(self.p.apikey)))
-
         if urlargs:
             url += '?' + '&'.join(urlargs)
+
+        headers = {}
+        if self.p.apikey:
+            headers['X-API-Key'] = self.p.apikey
 
         if self.p.proxies:
             proxy = ProxyHandler(self.p.proxies)
@@ -122,7 +128,7 @@ class FXMacroData(FXMacroDataCSV):
             install_opener(opener)
 
         try:
-            datafile = urlopen(url)
+            datafile = urlopen(Request(url, headers=headers))
             payload = json.loads(datafile.read().decode('utf-8'))
             datafile.close()
         except IOError as e:
