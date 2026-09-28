@@ -96,6 +96,7 @@ class FXMacroData(FXMacroDataCSV):
         ('proxies', {}),
         ('buffered', True),
         ('apikey', None),
+        ('headers', False),
     )
 
     def start(self):
@@ -105,7 +106,7 @@ class FXMacroData(FXMacroDataCSV):
         url = '{}/forex/{}/{}'.format(
             self.p.baseurl.rstrip('/'), base.lower(), quote.lower())
 
-        urlargs = []
+        urlargs = ['limit=100']
 
         if self.p.fromdate:
             urlargs.append('start_date={}'.format(
@@ -114,9 +115,6 @@ class FXMacroData(FXMacroDataCSV):
         if self.p.todate:
             urlargs.append('end_date={}'.format(
                 self.p.todate.strftime('%Y-%m-%d')))
-
-        if urlargs:
-            url += '?' + '&'.join(urlargs)
 
         headers = {}
         if self.p.apikey:
@@ -127,19 +125,33 @@ class FXMacroData(FXMacroDataCSV):
             opener = build_opener(proxy)
             install_opener(opener)
 
-        try:
-            datafile = urlopen(Request(url, headers=headers))
-            payload = json.loads(datafile.read().decode('utf-8'))
-            datafile.close()
-        except IOError as e:
-            self.error = str(e)
-            return
+        # The API returns at most 100 rows per request, newest first, so
+        # follow the offsets until the whole window has been read
+        rows = []
+        offset = 0
+        while True:
+            pageurl = '{}?{}&offset={}'.format(url, '&'.join(urlargs), offset)
+            try:
+                datafile = urlopen(Request(pageurl, headers=headers))
+                payload = json.loads(datafile.read().decode('utf-8'))
+                datafile.close()
+            except IOError as e:
+                self.error = str(e)
+                return
 
-        rows = payload.get('data', [])
+            page = payload.get('data', [])
+            rows.extend(page)
+            pagination = payload.get('pagination') or {}
+            if not page or not pagination.get('has_more'):
+                break
+            offset = pagination.get('next_offset') or len(rows)
+
         if not rows:
             self.error = 'No FXMacroData rows returned for {}'.format(
                 self.p.dataname)
             return
+
+        rows.sort(key=lambda row: row['date'])
 
         lines = []
         for row in rows:
