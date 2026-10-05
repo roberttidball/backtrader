@@ -116,9 +116,11 @@ class FXMacroData(FXMacroDataCSV):
             urlargs.append('end_date={}'.format(
                 self.p.todate.strftime('%Y-%m-%d')))
 
-        headers = {}
-        if self.p.apikey:
-            headers['X-API-Key'] = self.p.apikey
+        apikey = (self.p.apikey or '').strip()
+        if any(c.isspace() or ord(c) < 32 for c in apikey):
+            # never include the key itself in the error text
+            self.error = 'FXMacroData API key contains invalid characters'
+            return
 
         if self.p.proxies:
             proxy = ProxyHandler(self.p.proxies)
@@ -131,15 +133,28 @@ class FXMacroData(FXMacroDataCSV):
         offset = 0
         while True:
             pageurl = '{}?{}&offset={}'.format(url, '&'.join(urlargs), offset)
+            request = Request(pageurl)
+            if apikey:
+                # unredirected headers are not copied onto a followed
+                # redirect, so the key is never sent to another host
+                request.add_unredirected_header('X-API-Key', apikey)
             try:
-                datafile = urlopen(Request(pageurl, headers=headers))
+                datafile = urlopen(request)
                 payload = json.loads(datafile.read().decode('utf-8'))
                 datafile.close()
             except IOError as e:
                 self.error = str(e)
                 return
+            except ValueError:
+                self.error = 'FXMacroData returned a non-JSON response'
+                return
 
-            page = payload.get('data', [])
+            page = payload.get('data') if isinstance(payload, dict) else None
+            if not isinstance(page, list):
+                self.error = 'Unexpected FXMacroData response: {}'.format(
+                    payload.get('detail', 'no data list')
+                    if isinstance(payload, dict) else 'no data list')
+                return
             rows.extend(page)
             pagination = payload.get('pagination') or {}
             if not page or not pagination.get('has_more'):
@@ -151,6 +166,8 @@ class FXMacroData(FXMacroDataCSV):
                 self.p.dataname)
             return
 
+        rows = [row for row in rows
+                if isinstance(row, dict) and row.get('date')]
         rows.sort(key=lambda row: row['date'])
 
         lines = []
